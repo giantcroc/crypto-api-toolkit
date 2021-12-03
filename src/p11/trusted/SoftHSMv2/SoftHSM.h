@@ -72,6 +72,10 @@
 #include "HandleManager.h"
 #include "RSAPublicKey.h"
 #include "RSAPrivateKey.h"
+#include "OSSLRSAPrivateKey.h"
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
 #if 0 // Unsupported by Crypto API Toolkit
 #include "DSAPublicKey.h"
 #include "DSAPrivateKey.h"

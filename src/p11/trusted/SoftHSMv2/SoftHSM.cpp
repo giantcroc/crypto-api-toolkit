@@ -807,6 +807,7 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_SHA512_HMAC"]		= CKM_SHA512_HMAC;
 	t["CKM_RSA_PKCS_KEY_PAIR_GEN"]	= CKM_RSA_PKCS_KEY_PAIR_GEN;
 	t["CKM_RSA_PKCS"]		= CKM_RSA_PKCS;
+	t["CKM_RSA_PKCS_TLS_SHA256"]		= CKM_RSA_PKCS_TLS_SHA256;
 	t["CKM_RSA_X_509"]		= CKM_RSA_X_509;
 #if 0 // Unsupported by Crypto API Toolkit
 #ifndef WITH_FIPS
@@ -5058,8 +5059,13 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #endif
 #ifdef WITH_EDDSA
 	bool isEDDSA = false;
-#endif
+#endif 
 	switch(pMechanism->mechanism) {
+		case CKM_RSA_PKCS_TLS_SHA256:
+			mechanism = AsymMech::RSA_SHA256_PKCS_PSS_TLS;
+			bAllowMultiPartOp = false;
+			isRSA = true;
+			break;
 		case CKM_RSA_PKCS:
 			mechanism = AsymMech::RSA_PKCS;
 			bAllowMultiPartOp = false;
@@ -5650,6 +5656,96 @@ static CK_RV AsymSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, C
 	return CKR_OK;
 }
 
+static CK_RV TLSSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen)
+{
+	AsymMech::Type mechanism = session->getMechanism();
+	PrivateKey* privateKey = session->getPrivateKey();
+	size_t paramLen;
+	void* param = session->getParameters(paramLen);
+	
+	if (!session->getAllowSinglePartOp() || privateKey == NULL)
+	{
+		session->resetOp();
+		return CKR_OPERATION_NOT_INITIALIZED;
+	}
+
+	// Check if re-authentication is required
+	if (session->getReAuthentication())
+	{
+		session->resetOp();
+		return CKR_USER_NOT_LOGGED_IN;
+	}
+
+	// Size of the signature
+	CK_ULONG size = privateKey->getOutputLength();
+	if (pSignature == NULL_PTR)
+	{
+		*pulSignatureLen = size;
+		return CKR_OK;
+	}
+
+	// Check buffer size
+	if (*pulSignatureLen < size)
+	{
+		*pulSignatureLen = size;
+		return CKR_BUFFER_TOO_SMALL;
+	}
+	
+	OSSLRSAPrivateKey* osslKey = (OSSLRSAPrivateKey*) privateKey;
+	RSA* rsa = osslKey->getOSSLKey();
+	EVP_PKEY *rsa_pkey = EVP_PKEY_new();
+	if (rsa_pkey)
+		 EVP_PKEY_assign_RSA(rsa_pkey,rsa);
+	else{ 
+		session->resetOp();
+		return CKR_GENERAL_ERROR;
+	}
+
+	// get digest function
+    const EVP_MD *md_func = EVP_sha256();
+	if (!md_func) {
+		session->resetOp();
+        return CKR_GENERAL_ERROR;
+    }
+
+	// digest sign
+    
+    EVP_PKEY_CTX *pctx;
+
+	EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+	if (ctx == NULL)
+	{
+		// ERROR_MSG("Failed to allocate space for EVP_MD_CTX");
+		session->resetOp();
+		return CKR_GENERAL_ERROR;
+;
+	}
+    if (!EVP_DigestSignInit(ctx, &pctx, md_func, nullptr, rsa_pkey)) {
+		EVP_MD_CTX_free(ctx);
+		session->resetOp();
+        return CKR_GENERAL_ERROR;
+    }
+    
+	if (!EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) ||
+		!EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, -1 /* salt len = hash len */)) {
+		EVP_MD_CTX_free(ctx);
+		session->resetOp();
+		return CKR_GENERAL_ERROR;
+	}
+    
+
+    if (!EVP_DigestSign(ctx, pSignature, pulSignatureLen, pData, ulDataLen)) {
+		EVP_MD_CTX_free(ctx);
+		session->resetOp();
+        return CKR_GENERAL_ERROR;
+    }
+	
+	//*pulSignatureLen = size;
+	EVP_MD_CTX_free(ctx);
+	session->resetOp();
+	return CKR_OK;
+}
+
 // Sign the data in a single pass operation
 CK_RV SoftHSM::C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen)
 {
@@ -5697,12 +5793,18 @@ CK_RV SoftHSM::C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ul
 		return CKR_OPERATION_NOT_INITIALIZED;
 
     CK_RV rv;
-	if (session->getMacOp() != NULL)
-		rv = MacSign(session, pData, ulDataLen,
-			       pSignature, l_pulSignatureLen);
-	else
-		rv = AsymSign(session, pData, ulDataLen,
+	AsymMech::Type mechanism = session->getMechanism();
+	if(mechanism == AsymMech::RSA_SHA256_PKCS_PSS_TLS)
+		rv = TLSSign(session, pData, ulDataLen,
 				pSignature, l_pulSignatureLen);
+	else{
+		if (session->getMacOp() != NULL)
+			rv = MacSign(session, pData, ulDataLen,
+			       pSignature, l_pulSignatureLen);
+		else
+			rv = AsymSign(session, pData, ulDataLen,
+					pSignature, l_pulSignatureLen);
+	}
 
     *pulSignatureLen = ulSignatureLen;
 
