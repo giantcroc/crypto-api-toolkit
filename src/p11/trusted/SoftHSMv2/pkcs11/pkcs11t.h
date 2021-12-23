@@ -588,6 +588,7 @@ typedef CK_ULONG          CK_MECHANISM_TYPE;
 /* the following mechanism types are defined: */
 #define CKM_RSA_PKCS_KEY_PAIR_GEN      0x00000000UL
 #define CKM_RSA_PKCS_TLS_SHA256        0x01000001UL
+#define CKM_ECDSA_PKCS_TLS_SHA256      0x01100001UL
 #define CKM_RSA_PKCS                   0x00000001UL
 #define CKM_RSA_9796                   0x00000002UL
 #define CKM_RSA_X_509                  0x00000003UL

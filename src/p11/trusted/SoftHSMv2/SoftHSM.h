@@ -73,6 +73,7 @@
 #include "RSAPublicKey.h"
 #include "RSAPrivateKey.h"
 #include "OSSLRSAPrivateKey.h"
+#include "OSSLECPrivateKey.h"
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>

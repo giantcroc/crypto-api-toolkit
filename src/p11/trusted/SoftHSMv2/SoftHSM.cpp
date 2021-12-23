@@ -808,6 +808,7 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_RSA_PKCS_KEY_PAIR_GEN"]	= CKM_RSA_PKCS_KEY_PAIR_GEN;
 	t["CKM_RSA_PKCS"]		= CKM_RSA_PKCS;
 	t["CKM_RSA_PKCS_TLS_SHA256"]		= CKM_RSA_PKCS_TLS_SHA256;
+	t["CKM_ECDSA_PKCS_TLS_SHA256"]		= CKM_ECDSA_PKCS_TLS_SHA256;
 	t["CKM_RSA_X_509"]		= CKM_RSA_X_509;
 #if 0 // Unsupported by Crypto API Toolkit
 #ifndef WITH_FIPS
@@ -5066,6 +5067,11 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 			bAllowMultiPartOp = false;
 			isRSA = true;
 			break;
+		case CKM_ECDSA_PKCS_TLS_SHA256:
+			mechanism = AsymMech::ECDSA_TLS_SHA256;
+			bAllowMultiPartOp = false;
+			isECDSA = true;
+			break;
 		case CKM_RSA_PKCS:
 			mechanism = AsymMech::RSA_PKCS;
 			bAllowMultiPartOp = false;
@@ -5656,6 +5662,64 @@ static CK_RV AsymSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, C
 	return CKR_OK;
 }
 
+static CK_RV ECTLSSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen)
+{
+	AsymMech::Type mechanism = session->getMechanism();
+	PrivateKey* privateKey = session->getPrivateKey();
+	size_t paramLen;
+	void* param = session->getParameters(paramLen);
+	
+	if (!session->getAllowSinglePartOp() || privateKey == NULL)
+	{
+		session->resetOp();
+		return CKR_OPERATION_NOT_INITIALIZED;
+	}
+
+	// Check if re-authentication is required
+	if (session->getReAuthentication())
+	{
+		session->resetOp();
+		return CKR_USER_NOT_LOGGED_IN;
+	}
+
+	OSSLECPrivateKey* pk = (OSSLECPrivateKey*) privateKey;
+	EC_KEY* eckey = pk->getOSSLKey();
+
+	if (eckey == NULL)
+	{
+		// ERROR_MSG("Could not get the OpenSSL private key");
+
+		session->resetOp();
+		return CKR_GENERAL_ERROR;
+	}
+
+	CK_ULONG size = ECDSA_size(eckey);
+	if (pSignature == NULL_PTR)
+	{
+		*pulSignatureLen = size;
+		return CKR_OK;
+	}
+
+	// Check buffer size
+	if (*pulSignatureLen < size)
+	{
+		*pulSignatureLen = size;
+		return CKR_BUFFER_TOO_SMALL;
+	}
+
+    unsigned int out_len;
+	 // Borrow "out" because it has been already initialized to the max_out size.
+    if (!ECDSA_sign(0, pData, ulDataLen, pSignature, &out_len, eckey)) {
+		session->resetOp();
+		return CKR_GENERAL_ERROR;
+    }
+
+    *pulSignatureLen = out_len;
+
+	session->resetOp();
+	return CKR_OK;
+}
+
 static CK_RV TLSSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen)
 {
 	AsymMech::Type mechanism = session->getMechanism();
@@ -5718,7 +5782,6 @@ static CK_RV TLSSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK
 		// ERROR_MSG("Failed to allocate space for EVP_MD_CTX");
 		session->resetOp();
 		return CKR_GENERAL_ERROR;
-;
 	}
     if (!EVP_DigestSignInit(ctx, &pctx, md_func, nullptr, rsa_pkey)) {
 		EVP_MD_CTX_free(ctx);
@@ -5732,15 +5795,28 @@ static CK_RV TLSSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK
 		session->resetOp();
 		return CKR_GENERAL_ERROR;
 	}
-    
 
-    if (!EVP_DigestSign(ctx, pSignature, pulSignatureLen, pData, ulDataLen)) {
+	ByteString signature;
+	signature.resize(size);
+	// Check size
+	if (signature.size() != size)
+	{
+		// ERROR_MSG("The size of the signature differs from the size of the mechanism");
+		EVP_MD_CTX_free(ctx);
+		session->resetOp();
+		return CKR_GENERAL_ERROR;
+	}
+
+	if (!EVP_DigestSign(ctx, &signature[0], pulSignatureLen, pData, ulDataLen)) {
 		EVP_MD_CTX_free(ctx);
 		session->resetOp();
         return CKR_GENERAL_ERROR;
     }
-	
-	//*pulSignatureLen = size;
+
+    memcpy_s(pSignature, *pulSignatureLen, signature.byte_str(), size);
+	*pulSignatureLen = size;
+    
+
 	EVP_MD_CTX_free(ctx);
 	session->resetOp();
 	return CKR_OK;
@@ -5796,6 +5872,9 @@ CK_RV SoftHSM::C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ul
 	AsymMech::Type mechanism = session->getMechanism();
 	if(mechanism == AsymMech::RSA_SHA256_PKCS_PSS_TLS)
 		rv = TLSSign(session, pData, ulDataLen,
+				pSignature, l_pulSignatureLen);
+	else if(mechanism == AsymMech::ECDSA_TLS_SHA256)
+		rv = ECTLSSign(session, pData, ulDataLen,
 				pSignature, l_pulSignatureLen);
 	else{
 		if (session->getMacOp() != NULL)

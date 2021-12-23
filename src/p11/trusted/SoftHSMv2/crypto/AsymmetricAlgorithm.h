@@ -86,6 +86,7 @@ struct AsymMech
 		DSA_SHA384,
 		DSA_SHA512,
 		ECDSA,
+		ECDSA_TLS_SHA256,
 		GOST,
 		GOST_GOST,
 		EDDSA
