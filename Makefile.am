@@ -62,8 +62,8 @@ SGXSSLLIBDIR = $(SGXSSLDIR)/lib64
 endif
 
 PREPARE_SGX_SSL:
-	chmod 755 $(PREPARE_SGXSSL)
-	chmod 755 $(CHECK_OPENSSL_VERSION)
+#	chmod 755 $(PREPARE_SGXSSL)
+#	chmod 755 $(CHECK_OPENSSL_VERSION)
 	test -f $(SGXSSLLIBDIR)/lib$(SGXSSL_TCRYPTO).a && test -f $(SGXSSLLIBDIR)/lib$(SGXSSL_TLIB).a && test -f $(SGXSSLDIR)/lib64/lib$(SGXSSL_ULIB).a  && ./$(CHECK_OPENSSL_VERSION) $(SGXSSLDIR) $(SGXSSLLIBDIR) $(SGXSDKDIR) $ || ./$(PREPARE_SGXSSL) $(SGXSSLDIR) $(TARGET)
 
 clean-local:
@@ -78,9 +78,9 @@ clean-local:
 
 install-exec-local:
 	mkdir -p $(CATKTOKENPATH)/tokens
-	chmod -R 1777 $(CATKTOKENPATH)/tokens
+#	chmod -R 1777 $(CATKTOKENPATH)/tokens
 	mkdir -p $(prefix)/include
-	chmod -R 1777 $(prefix)/include
+#	chmod -R 1777 $(prefix)/include
 	cp $(srcdir)/src/p11/trusted/SoftHSMv2/common/QuoteGeneration.h $(srcdir)/src/p11/trusted/SoftHSMv2/common/cryptoki.h $(srcdir)/src/p11/trusted/SoftHSMv2/common/QuoteGenerationDefs.h $(prefix)/include
 
 if !WITH_P11_KIT
